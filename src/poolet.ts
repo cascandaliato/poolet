@@ -1,4 +1,4 @@
-import { DoublyLinkedList } from './doubly-linked-list'
+import { Queue } from './queue'
 
 type Resolver<E> = (value: E | PromiseLike<E>) => void
 type Rejecter = (reason?: any) => void
@@ -22,8 +22,8 @@ export type PoolOptions = {
   maxPoolSize: number
   minAvailable: number
   maxAvailable: number
-  testBeforeAcquire: boolean
-  testAfterRelease: boolean
+  // testBeforeAcquire: boolean
+  // testAfterRelease: boolean
 }
 
 const DEFAULT_POOL_OPTIONS: Readonly<PoolOptions> = {
@@ -32,14 +32,14 @@ const DEFAULT_POOL_OPTIONS: Readonly<PoolOptions> = {
   maxPoolSize: +Infinity,
   minAvailable: 0,
   maxAvailable: +Infinity,
-  testBeforeAcquire: false,
-  testAfterRelease: false,
+  // testBeforeAcquire: false,
+  // testAfterRelease: false,
 }
 
 export class Poolet<RESOURCE> {
   private options: PoolOptions
-  private promises = new DoublyLinkedList<Listener<RESOURCE>>()
-  private resources = new DoublyLinkedList<RESOURCE>()
+  private promises = new Queue<Listener<RESOURCE>>()
+  private resources = new Queue<RESOURCE>()
   private counters = { acquired: 0, pending: 0 }
 
   /**
@@ -63,10 +63,10 @@ export class Poolet<RESOURCE> {
 
     if (this.resources.size > 0) {
       this.counters.acquired++
-      resource = Promise.resolve(this.resources.removeFirst())
+      resource = Promise.resolve(this.resources.remove())
     } else {
       resource = new Promise<RESOURCE>((resolve, reject) =>
-        this.promises.addLast({
+        this.promises.add({
           resolve,
           reject,
         })
@@ -89,7 +89,8 @@ export class Poolet<RESOURCE> {
     const eventuallyAvailable =
       this.counters.pending + this.resources.size - this.promises.size
     const gap = Math.max(this.options.minAvailable - eventuallyAvailable, 0)
-    this.createResources(Math.min(this.options.maxPoolSize - this.size, gap))
+    const toCreate = Math.min(this.options.maxPoolSize - this.size, gap)
+    this.createResources(toCreate)
 
     // destroy excess resources
     if (this.factory.destroy) {
@@ -102,14 +103,14 @@ export class Poolet<RESOURCE> {
       )
 
       for (let i = 0; i < excess; i++) {
-        this.factory.destroy(this.resources.removeFirst()).catch(() => {
+        this.factory.destroy(this.resources.remove()).catch(() => {
           /* TODO: do something? */
         })
       }
     }
   }
 
-  private createResources(n = 1): void {
+  private createResources(n: number): void {
     for (let i = 0; i < n; i++) {
       this.factory
         .create()
@@ -127,12 +128,12 @@ export class Poolet<RESOURCE> {
 
   private enqueue(resource: RESOURCE): void {
     if (this.promises.size > 0) {
-      const { resolve } = this.promises.removeFirst()
+      const { resolve } = this.promises.remove()
       this.counters.acquired++
       this.rebalance()
       resolve(resource)
     } else {
-      this.resources.addLast(resource)
+      this.resources.add(resource)
       this.rebalance()
     }
   }
@@ -143,5 +144,9 @@ export class Poolet<RESOURCE> {
 
   get pending(): number {
     return this.counters.pending
+  }
+
+  get ready(): number {
+    return this.resources.size
   }
 }
